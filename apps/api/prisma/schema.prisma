@@ -1,3 +1,215 @@
-generator client { provider = "prisma-client-js" }
+generator client {
+	provider = "prisma-client-js"
+}
 
-datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+datasource db {
+	provider = "postgresql"
+	url      = env("DATABASE_URL")
+}
+
+enum CycleStatus {
+	PLANNED
+	ACTIVE
+	COMPLETED
+}
+
+enum ParticipationStatus {
+	ACTIVE
+	HISTORICAL
+}
+
+enum SourceStatus {
+	VERIFIED
+	REPORTED
+	INFERRED
+	STALE
+	UNKNOWN
+}
+
+enum ProjectStatus {
+	OPEN
+	ARCHIVED
+}
+
+enum RepositoryRole {
+	PRIMARY
+	RELATED
+	ARCHIVE
+}
+
+enum SourceType {
+	OFFICIAL_PROGRAM
+	ORGANIZATION_SITE
+	GITHUB
+	CURATED_FIXTURE
+}
+
+model Program {
+	id         String         @id @default(uuid()) @db.Uuid
+	slug       String         @unique
+	name       String
+	websiteUrl String?        @map("website_url")
+	createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+	cycles     ProgramCycle[]
+
+	@@map("programs")
+}
+
+model ProgramCycle {
+	id             String                     @id @default(uuid()) @db.Uuid
+	programId      String                     @map("program_id") @db.Uuid
+	year           Int
+	startsAt       DateTime?                  @map("starts_at") @db.Timestamptz(6)
+	endsAt         DateTime?                  @map("ends_at") @db.Timestamptz(6)
+	status         CycleStatus
+	officialUrl    String?                    @map("official_url")
+	createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt      DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+	program        Program                    @relation(fields: [programId], references: [id], onDelete: Restrict)
+	participations OrganizationParticipation[]
+
+	@@unique([programId, year])
+	@@index([programId, status])
+	@@map("program_cycles")
+}
+
+model Organization {
+	id             String                     @id @default(uuid()) @db.Uuid
+	slug           String                     @unique
+	name           String
+	description    String?
+	websiteUrl     String?                    @map("website_url")
+	githubOrgLogin String                     @unique @map("github_org_login")
+	createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt      DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+	participations OrganizationParticipation[]
+	repositories   OrganizationRepository[]
+
+	@@map("organizations")
+}
+
+model OrganizationParticipation {
+	id                 String         @id @default(uuid()) @db.Uuid
+	organizationId     String         @map("organization_id") @db.Uuid
+	programCycleId     String         @map("program_cycle_id") @db.Uuid
+	status             ParticipationStatus
+	officialListingUrl String?        @map("official_listing_url")
+	sourceStatus       SourceStatus   @map("source_status")
+	createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt          DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+	organization       Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+	programCycle       ProgramCycle   @relation(fields: [programCycleId], references: [id], onDelete: Restrict)
+	projects           Project[]
+
+	@@unique([organizationId, programCycleId])
+	@@index([programCycleId, status])
+	@@map("organization_participations")
+}
+
+model Project {
+	id              String                    @id @default(uuid()) @db.Uuid
+	participationId String                    @map("participation_id") @db.Uuid
+	title           String
+	normalizedTitle String                    @map("normalized_title")
+	description     String?
+	size            String?
+	proposalUrl     String?                   @map("proposal_url")
+	status          ProjectStatus
+	sourceStatus    SourceStatus              @map("source_status")
+	createdAt       DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt       DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+	participation   OrganizationParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+	repositories    ProjectRepository[]
+
+	@@unique([participationId, normalizedTitle])
+	@@index([participationId, status])
+	@@map("projects")
+}
+
+model Repository {
+	id                   String                    @id @default(uuid()) @db.Uuid
+	githubRepositoryId   BigInt                    @unique @map("github_repository_id")
+	ownerLogin           String                    @map("owner_login")
+	name                 String
+	ownerLoginNormalized String                    @map("owner_login_normalized")
+	nameNormalized       String                    @map("name_normalized")
+	url                  String
+	defaultBranch        String?                   @map("default_branch")
+	languageMetrics      Json?                     @map("language_metrics")
+	archived             Boolean                   @default(false)
+	lastSyncedAt         DateTime?                 @map("last_synced_at") @db.Timestamptz(6)
+	createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+	organizations        OrganizationRepository[]
+	projects             ProjectRepository[]
+
+	@@unique([ownerLoginNormalized, nameNormalized])
+	@@index([archived, lastSyncedAt])
+	@@map("repositories")
+}
+
+model OrganizationRepository {
+	organizationId String         @map("organization_id") @db.Uuid
+	repositoryId   String         @map("repository_id") @db.Uuid
+	role           RepositoryRole
+	sourceId       String?        @map("source_id") @db.Uuid
+	organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+	repository     Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+	source         Source?        @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+	@@id([organizationId, repositoryId])
+	@@index([repositoryId])
+	@@map("organization_repositories")
+}
+
+model ProjectRepository {
+	projectId    String     @map("project_id") @db.Uuid
+	repositoryId String     @map("repository_id") @db.Uuid
+	role         RepositoryRole
+	sourceId     String?    @map("source_id") @db.Uuid
+	project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+	repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+	source       Source?    @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+	@@id([projectId, repositoryId])
+	@@index([repositoryId])
+	@@map("project_repositories")
+}
+
+model Source {
+	id                   String                    @id @default(uuid()) @db.Uuid
+	url                  String                    @unique
+	publisher            String
+	sourceType           SourceType                @map("source_type")
+	retrievedAt          DateTime                  @map("retrieved_at") @db.Timestamptz(6)
+	contentHash          String?                   @unique @map("content_hash")
+	reliabilityTier      Int                       @map("reliability_tier")
+	isDevelopmentFixture Boolean                   @default(false) @map("is_development_fixture")
+	createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+	updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+	assertions           FactAssertion[]
+	organizationLinks    OrganizationRepository[]
+	projectLinks         ProjectRepository[]
+
+	@@map("sources")
+}
+
+model FactAssertion {
+	id                String       @id @default(uuid()) @db.Uuid
+	sourceId          String       @map("source_id") @db.Uuid
+	entityType        String       @map("entity_type")
+	entityId          String       @map("entity_id") @db.Uuid
+	field             String
+	value             Json
+	observedAt        DateTime     @map("observed_at") @db.Timestamptz(6)
+	extractionMethod  String       @map("extraction_method")
+	confidence        Decimal      @db.Decimal(5, 4)
+	verificationState SourceStatus @map("verification_state")
+	source            Source       @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+	// entityId is intentionally polymorphic so assertions can retain history for any catalog entity.
+	@@index([entityType, entityId, field, observedAt])
+	@@index([sourceId])
+	@@map("fact_assertions")
+}
